@@ -1,5 +1,7 @@
 # SmallCode
 
+[![npm](https://img.shields.io/npm/v/smallcode)](https://www.npmjs.com/package/smallcode)
+
 **AI coding agent optimized for small LLMs (≤20B parameters)**
 
 SmallCode is a terminal-native coding agent designed from the ground up to extract useful work from local models (7B-20B) running on consumer hardware. While tools like OpenCode assume frontier models with 128k+ context and perfect tool calling, SmallCode compensates for the limitations of small models through intelligent architecture.
