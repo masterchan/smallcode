@@ -485,13 +485,15 @@ class FullScreenTUI {
 
     const left = ` enter send`;
     const scrollInfo = this.chatScroll < 0 ? `  ↑ scrolled` : '';
+    const tokenStr = this.tokenInfo ? `  ${this.tokenInfo}` : '';
     const right = ` smallcode  ${this.model}  ${this.isStreaming ? '⟳' : '●'} `;
-    const padding = this.width - left.length - scrollInfo.length - right.length;
+    const padding = this.width - left.length - scrollInfo.length - tokenStr.length - right.length;
 
     buf += t.muted + left + ANSI.reset + t.statusBg;
     if (scrollInfo) {
       buf += (t.warning || t.muted) + scrollInfo + ANSI.reset + t.statusBg;
     }
+    buf += t.muted + tokenStr + ANSI.reset + t.statusBg;
     buf += ' '.repeat(Math.max(1, padding));
     buf += t.brandDim + right + ANSI.reset;
 
@@ -724,6 +726,11 @@ class FullScreenTUI {
 
   setModel(name) {
     this.model = name;
+    this.render();
+  }
+
+  setTokenInfo(info) {
+    this.tokenInfo = info || '';
     this.render();
   }
 

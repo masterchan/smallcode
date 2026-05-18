@@ -114,16 +114,24 @@ Persistent scratchpad that survives across turns. Compensates for limited reason
 
 ## Supported Models
 
+Any OpenAI-compatible endpoint works. Tested and rated with SmallCode's harness:
+
 | Model | Size | Context | Tool Calling | Rating |
 |-------|------|---------|--------------|--------|
-| Qwen2.5-Coder-14B | 14B | 32k | ✅ Native | ⭐⭐⭐⭐⭐ |
-| Qwen3-8B | 8B | 32k | ✅ Native | ⭐⭐⭐⭐ |
-| Devstral Small | ~14B | 32k | ✅ Native | ⭐⭐⭐⭐⭐ |
-| Mistral-Nemo-12B | 12B | 32k | ✅ Native | ⭐⭐⭐⭐ |
-| DeepSeek-Coder-V2-Lite | 16B | 16k | ❌ Text | ⭐⭐⭐ |
-| CodeLlama-13B | 13B | 16k | ❌ Text | ⭐⭐⭐ |
-| StarCoder2-15B | 15B | 16k | ❌ Text | ⭐⭐ |
-| Phi-3-Mini | 3.8B | 4k | ❌ Text | ⭐⭐ |
+| Gemma 4 E4B (MoE) | 8B/4B active | 32k | ✅ Native | ⭐⭐⭐⭐⭐ |
+| Qwen 3.6-8B | 8B | 128k | ✅ Native | ⭐⭐⭐⭐⭐ |
+| Devstral Small | 14B | 128k | ✅ Native | ⭐⭐⭐⭐⭐ |
+| Qwen 3.5-14B | 14B | 128k | ✅ Native | ⭐⭐⭐⭐⭐ |
+| Gemma 4 27B (MoE) | 27B/4B active | 128k | ✅ Native | ⭐⭐⭐⭐⭐ |
+| Llama 4 Scout | 17B active | 512k | ✅ Native | ⭐⭐⭐⭐ |
+| Mistral Small 3.2 | 24B | 128k | ✅ Native | ⭐⭐⭐⭐ |
+| Phi-4 Mini | 3.8B | 128k | ✅ Native | ⭐⭐⭐ |
+| DeepSeek-R1-0528 (distill) | 14B | 64k | ✅ Native | ⭐⭐⭐⭐ |
+
+**Escalation targets** (cloud, used only on hard fail):
+- Claude Sonnet 4 / Haiku 4
+- GPT-4o / GPT-4o-mini
+- DeepSeek Coder
 
 ## Configuration
 
@@ -131,8 +139,8 @@ Project-level `smallcode.toml`:
 
 ```toml
 [model]
-provider = "ollama"
-name = "qwen2.5-coder-14b"
+provider = "openai"
+name = "gemma-4-e4b"
 
 [context]
 max_budget_pct = 70

@@ -17,6 +17,9 @@ const { ToolScorer, checkAndEnforceHardFail, classifyTask } = require('./governo
 const { EscalationEngine } = require('./escalation');
 const { PluginLoader } = require('../src/plugins/loader');
 const { SkillManager } = require('../src/plugins/skills');
+const { SessionStore } = require('../src/session/persistence');
+const { resolveReferences, formatReferencesForPrompt } = require('../src/session/references');
+const { TokenTracker } = require('../src/session/tokens');
 
 // Initialize structured memory (budget-aware-mcp's SQLite + FTS5 store)
 let memoryStore;
@@ -37,6 +40,10 @@ let escalationEngine = null; // created after config loads
 // Initialize plugin + skill systems
 let pluginLoader = null;
 let skillManager = null;
+
+// Session persistence + token tracking
+let sessionStore = null;
+let tokenTracker = null;
 
 // Fullscreen TUI reference for streaming (set when fullscreen mode is active)
 let _fullscreenRef = null;
@@ -380,6 +387,8 @@ async function runTUI(config) {
         screen.setStreaming(true);
         await runAgentLoop(input, config);
         screen.setStreaming(false);
+        // Update token counter in status bar
+        if (tokenTracker) screen.setTokenInfo(tokenTracker.formatShort());
         // Push recent assistant message to screen
         const lastMsg = conversationHistory.filter(m => m.role === 'assistant').pop();
         if (lastMsg && lastMsg.content) {
@@ -1136,7 +1145,13 @@ const MAX_TOOL_CALLS = 500;
 const MAX_IMPROVE_ITERATIONS = 2;
 
 async function runAgentLoop(userMessage, config) {
-  conversationHistory.push({ role: 'user', content: userMessage });
+  // Resolve @file references in user input
+  const { text, files } = resolveReferences(userMessage, process.cwd());
+  const augmented = files.length > 0
+    ? text + formatReferencesForPrompt(files)
+    : text;
+
+  conversationHistory.push({ role: 'user', content: augmented });
 
   // Governor: classify task type (determines verification strategy)
   currentTaskType = classifyTask(userMessage);
@@ -1668,7 +1683,22 @@ ${getMemoryContext(messages)}${getSkillContext(messages)}${getPluginPrompts()}`
       return null;
     }
 
-    return await response.json();
+    const data = await response.json();
+
+    // Track token usage
+    if (tokenTracker && data?.usage) {
+      tokenTracker.record(data, config.model.name);
+    }
+
+    // Auto-save session periodically
+    if (sessionStore) {
+      sessionStore.save(conversationHistory, {
+        tokens: tokenTracker ? tokenTracker.stats() : undefined,
+      });
+      sessionStore.autoTitle(conversationHistory);
+    }
+
+    return data;
   } catch (err) {
     console.log(`  \x1b[31m✗ ${err.message}\x1b[0m`);
     return null;
@@ -1982,6 +2012,21 @@ async function main() {
   // Initialize plugins and skills
   pluginLoader = new PluginLoader(process.cwd()).loadAll();
   skillManager = new SkillManager(process.cwd());
+
+  // Initialize session + token tracking
+  sessionStore = new SessionStore(process.cwd());
+  tokenTracker = new TokenTracker();
+
+  // Resume or create session
+  if (flags.resume) {
+    const resumed = sessionStore.resume();
+    if (resumed) {
+      conversationHistory.push(...resumed.messages);
+    }
+  }
+  if (!sessionStore.current) {
+    sessionStore.create(config.model.name);
+  }
 
   if (flags.mcp) {
     runMCP();
