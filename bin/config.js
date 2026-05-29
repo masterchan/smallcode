@@ -321,22 +321,52 @@ async function checkEndpoint(config) {
     }
   }
 
-  // Ollama endpoint
-  const host = process.env.OLLAMA_HOST || 'http://localhost:11434';
+  // Ollama endpoint.
+  // Prefer the user-supplied base URL (SMALLCODE_BASE_URL) over OLLAMA_HOST /
+  // localhost so a remote Ollama server is actually probed. Previously this
+  // branch always hit localhost and reported "Ollama not running" even when
+  // the user pointed SMALLCODE_BASE_URL at a remote host (issue #59).
+  // Ollama's native API lives at the host root (/api/tags), so strip any
+  // trailing OpenAI-style /v1 and normalise the trailing slash.
+  let host = config.model.baseUrl || process.env.OLLAMA_HOST || 'http://localhost:11434';
+  host = host.replace(/\/v1\/?$/, '').replace(/\/+$/, '');
+  const tagsUrl = `${host}/api/tags`;
   try {
-    const response = await fetch(`${host}/api/tags`);
-    if (!response.ok) return false;
+    // Carry auth (e.g. credentials embedded in the URL, or a bearer token /
+    // basic-auth header from buildAuthHeaders) so reverse-proxied Ollama
+    // servers behind auth are reachable.
+    const headers = buildAuthHeaders(config);
+    const response = await fetch(tagsUrl, { headers });
+    if (!response.ok) {
+      console.log(`  ⚠ Ollama returned HTTP ${response.status} from ${tagsUrl}`);
+      if (response.status === 401 || response.status === 403) {
+        console.log(`  Auth required — include credentials in SMALLCODE_BASE_URL or set OPENAI_API_KEY.`);
+      } else if (response.status === 404) {
+        console.log(`  Tip: ${host} has no /api/tags route. Is this actually an Ollama server? For OpenAI-compatible servers set SMALLCODE_PROVIDER=openai.`);
+      } else {
+        console.log(`  Check that Ollama is running and reachable at ${host}.`);
+      }
+      return false;
+    }
     const data = await response.json();
     const models = data.models || [];
     const hasModel = models.some(m => m.name.includes(config.model.name.split(':')[0]));
     if (!hasModel) {
-      console.log(`  ⚠ Model "${config.model.name}" not found in Ollama.`);
+      console.log(`  ⚠ Model "${config.model.name}" not found on the Ollama server at ${host}.`);
       console.log(`  Run: ollama pull ${config.model.name}`);
       return false;
     }
     return true;
-  } catch {
-    console.log('  ⚠ Ollama not running. Start it with: ollama serve');
+  } catch (e) {
+    // Surface the underlying error instead of assuming Ollama is simply not
+    // started — the user may have a wrong URL, DNS failure, or TLS issue.
+    const msg = e && e.message ? e.message : String(e);
+    console.log(`  ⚠ Cannot reach Ollama at ${tagsUrl}: ${msg}`);
+    const hint = /ECONNREFUSED/.test(msg) ? '  If this is a local server, start it with: ollama serve' :
+                 /ENOTFOUND|EAI_AGAIN/.test(msg) ? '  Check the hostname in SMALLCODE_BASE_URL.' :
+                 /certificate|TLS|SSL/i.test(msg) ? '  TLS error — check the https certificate or use http.' :
+                 '  Check that SMALLCODE_BASE_URL points at a running Ollama server.';
+    console.log(hint);
     return false;
   }
 }
@@ -374,6 +404,19 @@ function buildAuthHeaders(config) {
 
   if (apiKey) {
     headers['Authorization'] = `Bearer ${apiKey}`;
+  }
+  // Basic auth embedded in the URL (https://user:pass@host). The fetch() API
+  // does NOT apply URL userinfo automatically, so a reverse-proxied server
+  // behind basic auth would 401. Convert it to an explicit header. An
+  // explicit API key (Bearer, above) takes precedence if both are present.
+  if (!apiKey && modelConfig.baseUrl) {
+    try {
+      const u = new URL(modelConfig.baseUrl);
+      if (u.username) {
+        const creds = Buffer.from(`${decodeURIComponent(u.username)}:${decodeURIComponent(u.password)}`).toString('base64');
+        headers['Authorization'] = `Basic ${creds}`;
+      }
+    } catch { /* not a parseable URL — ignore */ }
   }
   if (baseUrl.includes('openrouter.ai')) {
     headers['HTTP-Referer'] = 'https://github.com/Doorman11991/smallcode';

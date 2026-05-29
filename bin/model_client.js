@@ -274,6 +274,19 @@ Rules:
     prompt += `\n\nBONESCRIPT MODE — For Node.js/TypeScript backends, use BoneScript.`;
   }
 
+  // Web research tools — only advertise them when web browsing is enabled.
+  // Smaller models trust the prose tool description over the raw `tools`
+  // array and will refuse research tasks ("my tools are for code files...")
+  // unless the prompt explicitly says the web tools exist (issue #58).
+  if (String(process.env.SMALLCODE_WEB_BROWSE).toLowerCase() === 'true') {
+    prompt += `
+
+WEB RESEARCH — you have live internet access:
+- web_search: focused query -> relevant results with URLs.
+- web_fetch: one URL -> that page's readable text.
+Use these whenever asked to research, look up, or find current information. Report a short summary with source URL(s); do NOT write scripts to fetch the web.`;
+  }
+
   prompt += `\nWorking directory: ${process.cwd()}`;
   prompt += memCtx + skillCtx + pluginCtx;
   return prompt;

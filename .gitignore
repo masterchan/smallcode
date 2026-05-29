@@ -80,3 +80,15 @@ marrow.toml
 !marrow/features_1_6.marrow
 !marrow/quality_monitor.marrow
 !marrow/read_guard.marrow
+
+# Kiro IDE (agent workspace, specs, hooks, and scratch)
+.kiro/
+.kiro-tmp/
+
+# Tooling / agent scratch state
+.qartez/
+.compare-modified.json
+
+# Harbor benchmark job output (generated per run, large)
+jobs/
+bench/harbor/

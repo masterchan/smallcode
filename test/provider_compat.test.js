@@ -226,3 +226,61 @@ test('max_tokens → max_completion_tokens for OpenAI cloud o1/o3/o4', () => {
   assert.equal(body4.max_tokens, 8192);
   assert.equal(body4.max_completion_tokens, undefined);
 });
+
+// ─── Issue #59: Ollama on a remote server with URL-embedded basic auth ──────
+
+test('buildAuthHeaders converts URL basic-auth userinfo into a Basic header', () => {
+  const prev = { ...process.env };
+  delete process.env.OPENAI_API_KEY;
+  delete process.env.SMALLCODE_API_KEY;
+  delete process.env.ANTHROPIC_API_KEY;
+  delete process.env.DEEPSEEK_API_KEY;
+  try {
+    const h = buildAuthHeaders({ model: { baseUrl: 'https://user:password@192.168.0.114/ollama/' } });
+    const expected = 'Basic ' + Buffer.from('user:password').toString('base64');
+    assert.equal(h['Authorization'], expected);
+  } finally {
+    process.env = prev;
+  }
+});
+
+test('buildAuthHeaders prefers an explicit API key over URL userinfo', () => {
+  const prev = { ...process.env };
+  process.env.SMALLCODE_API_KEY = 'sk-local';
+  try {
+    const h = buildAuthHeaders({ model: { baseUrl: 'https://user:password@host.local/ollama/' } });
+    assert.equal(h['Authorization'], 'Bearer sk-local');
+  } finally {
+    process.env = prev;
+  }
+});
+
+test('buildAuthHeaders leaves Authorization unset for a plain URL with no creds/key', () => {
+  const prev = { ...process.env };
+  delete process.env.OPENAI_API_KEY;
+  delete process.env.SMALLCODE_API_KEY;
+  delete process.env.ANTHROPIC_API_KEY;
+  delete process.env.DEEPSEEK_API_KEY;
+  try {
+    const h = buildAuthHeaders({ model: { baseUrl: 'http://192.168.0.114:11434' } });
+    assert.equal(h['Authorization'], undefined);
+  } finally {
+    process.env = prev;
+  }
+});
+
+test('buildAuthHeaders decodes percent-encoded credentials in the URL', () => {
+  const prev = { ...process.env };
+  delete process.env.OPENAI_API_KEY;
+  delete process.env.SMALLCODE_API_KEY;
+  delete process.env.ANTHROPIC_API_KEY;
+  delete process.env.DEEPSEEK_API_KEY;
+  try {
+    // password is "p@ss:word" percent-encoded as p%40ss%3Aword
+    const h = buildAuthHeaders({ model: { baseUrl: 'https://user:p%40ss%3Aword@host/ollama/' } });
+    const expected = 'Basic ' + Buffer.from('user:p@ss:word').toString('base64');
+    assert.equal(h['Authorization'], expected);
+  } finally {
+    process.env = prev;
+  }
+});

@@ -92,6 +92,12 @@ function applyThinkingBudget(body, options = {}) {
   // OpenRouter (which proxies to OpenAI). Other providers reject it with 400.
   // GPT-5.5, gpt-4o, and most local models do NOT support it.
   const modelName = String(body.model || '').toLowerCase();
+  // lfm2 (Liquid AI) emits a `reasoning_content` field, but injecting
+  // `chat_template_kwargs.enable_thinking` into the request *suppresses*
+  // its tool-call output entirely on LM Studio (observed on
+  // lfm2.5-8b-a1b-apex). Treat it as a non-budget-controllable reasoning
+  // model: the reasoning fallback in tool_call_extractor handles its
+  // empty-content edge case, no need to override the template.
   const isReasoningModel = /(^|[\/\-_])(o1|o3|o4|qwen3|qwq|deepseek-r|deepseek-v3-reason|claude-3-7|claude-4)/.test(modelName);
   if (isReasoningModel && isOpenAICloud) {
     if (!opts.disable) {

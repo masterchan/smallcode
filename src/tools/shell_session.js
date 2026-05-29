@@ -56,10 +56,19 @@ class ShellSession {
     if (this.starting) return this.starting;
 
     this.starting = (async () => {
+      // Fresh spawn — clear any leftover buffer + mark live before we attach
+      // handlers, so a restart after stop() starts from a clean slate.
+      this.buffer = '';
+      this._dead = false;
       const isWin = process.platform === 'win32';
-      // Use bash on POSIX (more predictable than sh), cmd.exe on Windows.
-      // We could prefer pwsh on Windows but cmd.exe is universally available.
-      const shellCmd = isWin ? 'cmd.exe' : (process.env.SHELL && /bash|zsh/.test(process.env.SHELL) ? process.env.SHELL : 'bash');
+      // POSIX: always use bash, never $SHELL. The sentinel command-wrapper
+      // below emits bash/POSIX syntax (`printf '\n%s_%d_\n' $?`) and passes
+      // bash-only flags (--norc --noprofile -i). Honouring $SHELL broke every
+      // zsh user: `zsh --norc ...` errors with "zsh: no such option: norc"
+      // and the shell exits immediately, so every bash tool call failed with
+      // "shell exited" (issue #58). cmd.exe on Windows.
+      const shellCmd = isWin ? 'cmd.exe' : 'bash';
+
       const shellArgs = isWin ? ['/Q', '/K', 'echo off & prompt $G'] : ['--norc', '--noprofile', '-i'];
 
       try {
@@ -78,11 +87,30 @@ class ShellSession {
         return false;
       }
 
-      this.proc.on('error', () => { this._dead = true; });
-      this.proc.on('exit', () => { this._dead = true; this._failPending('shell exited'); });
+      // Capture the specific child so a late event from a PREVIOUS shell can't
+      // stomp a freshly-spawned one. Without this guard, `stop()` immediately
+      // followed by `run()` races: the old proc's async 'exit' fires after the
+      // new shell spawned and flips this._dead=true on the live session,
+      // killing it (and producing empty output).
+      const proc = this.proc;
+      const isCurrent = () => this.proc === proc;
 
-      // Demux output via sentinel matching
+      proc.on('error', () => { if (isCurrent()) this._dead = true; });
+      proc.on('exit', () => { if (isCurrent()) { this._dead = true; this._failPending('shell exited'); } });
+
+      // Guard against async EPIPE on stdin. When the shell dies mid-write,
+      // `proc.stdin` emits an async 'error' (EPIPE) event. With no listener,
+      // Node escalates it to an uncaught exception and crashes the whole
+      // process — the try/catch around stdin.write() only catches the
+      // synchronous throw, not the async event. Mark the shell dead and let
+      // the next run() auto-restart it (issue #58).
+      proc.stdin.on('error', () => { if (isCurrent()) { this._dead = true; this._failPending('shell stdin error'); } });
+
+      // Demux output via sentinel matching. Ignore late chunks from a
+      // superseded process so they can't corrupt a freshly-spawned shell's
+      // buffer (same race as the exit-handler guard above).
       const onChunk = (chunk) => {
+        if (!isCurrent()) return;
         this.buffer += chunk.toString('utf8');
         // Hard cap to prevent runaway commands from OOMing us.
         // Be careful not to slice mid-sentinel, otherwise the head command
@@ -109,8 +137,8 @@ class ShellSession {
         }
         this._drain();
       };
-      this.proc.stdout.on('data', onChunk);
-      this.proc.stderr.on('data', onChunk);
+      proc.stdout.on('data', onChunk);
+      proc.stderr.on('data', onChunk);
 
       return true;
     })();

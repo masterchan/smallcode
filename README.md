@@ -64,6 +64,16 @@ SmallCode includes [BoneScript](https://github.com/Doorman11991/BoneScript) and 
   - **Windows**: Visual Studio Build Tools with "Desktop development with C++" workload, or `npm install -g windows-build-tools`
 - **If build fails, SmallCode still works** — it falls back to JSON-based memory automatically
 
+> **Note on the `prebuild-install@7.1.3: No longer maintained` warning** (issue #57):
+> this is a harmless upstream deprecation notice from a transitive dependency
+> (`budget-aware-mcp` → `better-sqlite3` → `prebuild-install`). `prebuild-install`
+> has no newer published version, and `better-sqlite3` still depends on it, so the
+> warning cannot be silenced by a version bump. It does **not** affect the install —
+> npm warnings are advisory and the package installs normally. If you prefer to skip
+> the native dependency entirely, install without optional deps:
+> `npm install -g smallcode --omit=optional` (you lose FTS5 memory search but keep the
+> JSON memory fallback).
+
 ### Configuration
 
 Create a `.env` file in your project root:
@@ -182,7 +192,7 @@ Halves the schema context overhead. Model picks a category (read/write/search/ru
 Detects repetition loops, patch spirals (stuck on corrupted file → forces rewrite), and greeting regression (model lost context → re-injects task). Saves tokens and time.
 
 ### Forgiving Tool Call Parser
-Small models produce messy output. SmallCode parses tool calls from JSON, YAML, XML, Hermes format, or plain text. Auto-repairs common mistakes (wrong param names, type mismatches).
+Small models produce messy output. SmallCode parses tool calls from JSON, YAML, XML, Hermes format, Liquid AI's `<|tool_call_start|>[func(kw='val')]<|tool_call_end|>` markers (lfm2.x), or plain text. Auto-repairs common mistakes (wrong param names, type mismatches). Falls back to scanning `reasoning_content` when `content` is empty (LM Studio reasoning models).
 
 ### Patch-First Editing
 Search-and-replace as the primary edit primitive. Small models can't reliably reproduce entire files — they truncate, hallucinate, or drift. `patch` is safer and more context-efficient.

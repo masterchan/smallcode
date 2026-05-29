@@ -1934,6 +1934,14 @@ CRITICAL — large file rule: write_file calls are limited to 60 lines / ~8KB. l
     prompt += `\n\nFor Node.js backends: write a .bone file → bone_check → bone_compile. Don't hand-write routes.`;
   }
 
+  // Web research tools — only advertise when web browsing is enabled. Small
+  // models trust this prose over the raw `tools` array and otherwise refuse
+  // research tasks ("my tools are for code files only") even though the web
+  // tools are available (issue #58).
+  if (taskType !== 'explanation' && String(process.env.SMALLCODE_WEB_BROWSE).toLowerCase() === 'true') {
+    prompt += `\n\nWEB RESEARCH — you have live internet access: web_search (query → results with URLs) and web_fetch (URL → page text). Use them for research / look-up / current-info tasks; report a short summary with source URL(s). Do NOT write scripts to fetch the web.`;
+  }
+
   if (cacheSplit) {
     // Dynamic context goes into a separate [CONTEXT] user message — see
     // buildDynamicContext(). Plan + plugins stay here (system role = authoritative).
@@ -2408,6 +2416,52 @@ async function chatCompletion(config, messages) {
     }
 
     const data = await response.json();
+
+    // Length-truncation recovery: reasoning models served via LM Studio
+    // (lfm2.x, Qwen3, DeepSeek R1) expose a separate `reasoning_content`
+    // field and can burn the entire `max_tokens` budget on thinking, then
+    // return an empty `content` + empty `tool_calls` with
+    // finish_reason='length'. Feeding that empty turn back to the loop
+    // triggers a spurious empty_response correction spiral. Instead, retry
+    // ONCE with a doubled output budget so the model can finish emitting
+    // its visible answer / tool call. Bounded retry — only fires when the
+    // turn is genuinely empty (no usable output) and was length-capped.
+    try {
+      const _choice = data?.choices?.[0];
+      const _msg = _choice?.message;
+      const _finish = _choice?.finish_reason;
+      const _emptyContent = !(typeof _msg?.content === 'string' && _msg.content.trim());
+      const _noToolCalls = !(Array.isArray(_msg?.tool_calls) && _msg.tool_calls.length > 0);
+      const _hadReasoning = typeof _msg?.reasoning_content === 'string' && _msg.reasoning_content.length > 0;
+      const _retryDisabled = String(process.env.SMALLCODE_LENGTH_RETRY || 'true').toLowerCase() === 'false';
+      if (!_retryDisabled && _finish === 'length' && _emptyContent && _noToolCalls && _hadReasoning && !body.__lengthRetry) {
+        const _curMax = body.max_tokens || 8192;
+        const _cap = parseInt(process.env.SMALLCODE_MAX_OUTPUT_TOKENS_CAP) || 16384;
+        const retryBody = { ...body, max_tokens: Math.min(_curMax * 2, _cap), __lengthRetry: true };
+        if (_fullscreenRef) _fullscreenRef.addTool('retry', 'warn', `length-capped, retrying @ ${retryBody.max_tokens}t`);
+        else console.log(`  \x1b[33m⚠ response truncated (all budget spent on reasoning) — retrying at ${retryBody.max_tokens} tokens\x1b[0m`);
+        const retryResp = await fetch(`${baseUrl}/chat/completions`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(retryBody),
+        });
+        if (retryResp.ok) {
+          const retryData = await retryResp.json();
+          const rChoice = retryData?.choices?.[0];
+          const rMsg = rChoice?.message;
+          const rHasOutput = (typeof rMsg?.content === 'string' && rMsg.content.trim()) ||
+                             (Array.isArray(rMsg?.tool_calls) && rMsg.tool_calls.length > 0);
+          // Only adopt the retry if it actually produced usable output.
+          if (rHasOutput) {
+            if (retryData.usage) {
+              tokenMonitor.recordCall(retryData.usage.prompt_tokens, retryData.usage.completion_tokens);
+              traceRecorder.recordTokens(retryData.usage.prompt_tokens, retryData.usage.completion_tokens);
+            }
+            return retryData;
+          }
+        }
+      }
+    } catch {}
 
     // Plugin hook: post_request
     if (pluginLoader) {

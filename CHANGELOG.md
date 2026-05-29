@@ -1,5 +1,85 @@
 # Changelog
 
+## [1.3.1] - 2026-05-29
+
+### fix: compatibility issues #57, #58, #59
+
+Three reported environment-compatibility bugs:
+
+- **#58 (zsh shell)** — `src/tools/shell_session.js` honoured `$SHELL`
+  when it matched `bash|zsh` but always passed bash-only flags
+  (`--norc --noprofile -i`). zsh rejects `--norc` and exits immediately,
+  so every `bash` tool call failed with "shell exited" for zsh users.
+  Now always launches `bash` on POSIX (the sentinel command-wrapper
+  emits bash/POSIX syntax anyway). `cmd.exe` on Windows unchanged.
+- **#58 (stdin EPIPE crash)** — when the shell died mid-write, the async
+  `'error'` (EPIPE) event on `proc.stdin` had no listener, so Node
+  escalated it to an uncaught exception and crashed the whole process.
+  Added a stdin `'error'` handler that marks the shell dead and lets the
+  next `run()` auto-restart it.
+- **#58 (web tools not advertised)** — `buildSystemPrompt` (both
+  `bin/model_client.js` and `bin/smallcode.js`) enumerated tools in prose
+  but never mentioned `web_search` / `web_fetch`, even with
+  `SMALLCODE_WEB_BROWSE=true`. Small models trusted the prose over the
+  raw `tools` array and refused research tasks. Now conditionally
+  describes the web tools when browsing is enabled.
+- **#59 (remote Ollama)** — the Ollama health check ignored
+  `SMALLCODE_BASE_URL` and always probed `OLLAMA_HOST`/localhost, so a
+  remote Ollama server reported "Ollama not running" with no diagnostics.
+  Now probes the configured base URL (stripping a trailing `/v1`), carries
+  auth, converts URL-embedded basic-auth (`https://user:pass@host`) into a
+  proper `Authorization: Basic` header, and surfaces the real error
+  (ECONNREFUSED / ENOTFOUND / TLS) instead of a generic message.
+- **#57 (prebuild-install deprecation)** — documented in the README that
+  the `prebuild-install@7.1.3: No longer maintained` warning is a harmless
+  upstream deprecation in a transitive optional dependency
+  (`budget-aware-mcp` → `better-sqlite3` → `prebuild-install`) with no
+  newer version to bump to. Added `--omit=optional` guidance.
+
+Also fixed a latent race in `shell_session.js` surfaced while testing:
+late `exit`/`data` events from a superseded shell process could stomp a
+freshly-spawned one. Event handlers are now scoped to their specific
+child process.
+
+Test coverage: `test/shell_session.test.js` (4 cases), `test/web_prompt.test.js`
+(3 cases), and 4 new basic-auth cases in `test/provider_compat.test.js`.
+Full suite: 148 passing.
+
+### fix: Liquid AI tool-call parser (lfm2.x compatibility)
+
+Adds support for Liquid AI's tool-call format. `lfm2.5-8b-a1b-apex` and
+related models emit calls as Python keyword-arg syntax wrapped in
+`<|tool_call_start|>[func(kw='val')]<|tool_call_end|>` markers. LM Studio
+passes this through unchanged because it has no parser for Liquid's
+chat template, so SmallCode previously saw zero tool calls and the model
+appeared completely broken.
+
+- New: `src/tools/liquid_tool_parser.js` — Python-literal-aware parser
+  for the markered format. Handles single/double-quoted strings with
+  `\n`, `\t`, `\\`, `\'`, `\xNN`, `\uNNNN` escapes; numbers, booleans
+  (`True`/`False`/`None`); nested lists and dicts.
+- `src/tools/tool_call_extractor.js` calls the new parser as its
+  highest-priority recovery path. Also falls back to scanning
+  `message.reasoning_content` when `message.content` is empty (Liquid AI
+  splits visible output and chain-of-thought into separate fields).
+- Test coverage: `test/liquid_tool_parser.test.js` (13 cases incl.
+  multi-call lists, JSON-in-content, and reasoning-content fallback).
+
+### bench: polyglot-mini comparison — lfm2.5-8b-a1b-apex vs gemma 4 e4b
+
+Ran the polyglot-mini suite (19 tasks) back-to-back against the LM Studio
+host at `10.0.0.20:1234`. Results in `bench/results/polyglot-mini.md`,
+raw JSON under `.smallcode/benchmarks/`.
+
+- `huihui-gemma-4-e4b-it-abliterated` — **16/19 (84%)**
+- `lfm2.5-8b-a1b-apex` (with parser fix) — **9/19 (47%)**, up from 1/19 (5%)
+
+Remaining lfm2.5 failures are dominated by `finish_reason='length'`
+truncation when the model exhausts its budget on `reasoning_content`
+before producing visible output. Documented as a known limitation in
+`bench/results/polyglot-mini.md`; not addressed in this pass to keep
+the change scoped to the format-parsing fix.
+
 ## [1.3.0] - 2026-05-26
 
 ### feat: plugin system core + provider wizard (#28, #29)

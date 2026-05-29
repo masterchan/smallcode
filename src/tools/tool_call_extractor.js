@@ -20,10 +20,11 @@
 // every model the same way.
 //
 // Recognised formats (in priority order):
-//   1. <tool_call>{...}</tool_call>           ← Hermes / qwen2.5 native
-//   2. ```json ... ```  (fenced code block)   ← qwen-coder / generic
-//   3. ```tool_call ... ```                   ← some llama3 fine-tunes
-//   4. Bare JSON object at the start of content
+//   1. <tool_call>{...}</tool_call>                          ← Hermes / qwen2.5 native
+//   2. <|tool_call_start|>[func(kw=val)]<|tool_call_end|>    ← Liquid AI lfm2.x
+//   3. ```json ... ```  (fenced code block)                  ← qwen-coder / generic
+//   4. ```tool_call ... ```                                  ← some llama3 fine-tunes
+//   5. Bare JSON object at the start of content
 //
 // All formats expect the JSON to be of shape:
 //   { "name": "<tool_name>", "arguments": <object> }
@@ -59,8 +60,16 @@ function extractFromMessage(message, toolSchemas) {
   if (Array.isArray(message.tool_calls) && message.tool_calls.length > 0) {
     return { patched: false, addedCalls: 0 };
   }
-  const content = typeof message.content === 'string' ? message.content : '';
+  // Some local providers (LM Studio with Liquid AI lfm2.x, llama.cpp with
+  // Qwen3 reasoning) split the response: visible text goes into `content`
+  // and chain-of-thought goes into `reasoning_content`. When the budget is
+  // tight the model can emit its tool call in reasoning_content and leave
+  // content empty. Fall back to scanning reasoning_content if content is empty.
+  const primary = typeof message.content === 'string' ? message.content : '';
+  const fallback = typeof message.reasoning_content === 'string' ? message.reasoning_content : '';
+  const content = primary && primary.trim().length > 0 ? primary : fallback;
   if (!content) return { patched: false, addedCalls: 0 };
+  const usingReasoningFallback = content === fallback && content !== primary;
 
   const known = new Set();
   if (Array.isArray(toolSchemas)) {
@@ -73,7 +82,22 @@ function extractFromMessage(message, toolSchemas) {
   const calls = [];
   const consumedRanges = []; // [start, end) of content we transferred into tool_calls
 
-  // 1. Tagged tool calls — strongest signal.
+  // 0. Liquid AI tool_call markers — `<|tool_call_start|>[func(kw=val)]<|tool_call_end|>`.
+  //    Strongest signal when present; processed first so the rest of the
+  //    pipeline doesn't try to interpret the Python-syntax payload as JSON.
+  try {
+    const { parseLiquidToolCalls } = require('./liquid_tool_parser');
+    const { calls: liquidCalls, ranges: liquidRanges } = parseLiquidToolCalls(content);
+    for (const c of liquidCalls) {
+      if (known.size > 0 && !known.has(c.name)) continue;
+      calls.push(c);
+    }
+    if (liquidCalls.length > 0) {
+      for (const r of liquidRanges) consumedRanges.push(r);
+    }
+  } catch {}
+
+  // 1. Tagged tool calls — strongest JSON-shaped signal.
   for (const m of content.matchAll(TOOL_CALL_TAG_RE)) {
     const parsed = _safeParseAny(m[1]);
     for (const tc of _normalize(parsed, known)) calls.push(tc);
@@ -120,13 +144,20 @@ function extractFromMessage(message, toolSchemas) {
   }));
 
   // Strip the consumed JSON spans from content. Process in reverse so
-  // indices stay valid.
-  let newContent = content;
-  consumedRanges.sort((a, b) => b[0] - a[0]);
-  for (const [s, e] of consumedRanges) {
-    newContent = newContent.slice(0, s) + newContent.slice(e);
+  // indices stay valid. Only mutate `message.content` — leave
+  // `reasoning_content` untouched (it's metadata, not chat history).
+  if (!usingReasoningFallback) {
+    let newContent = content;
+    consumedRanges.sort((a, b) => b[0] - a[0]);
+    for (const [s, e] of consumedRanges) {
+      newContent = newContent.slice(0, s) + newContent.slice(e);
+    }
+    message.content = newContent.trim();
+  } else {
+    // We extracted from reasoning_content; ensure message.content is at
+    // least an empty string so the agent loop sees a valid message.
+    message.content = typeof message.content === 'string' ? message.content : '';
   }
-  message.content = newContent.trim();
 
   return { patched: true, addedCalls: calls.length };
 }
