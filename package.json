@@ -5,6 +5,7 @@
   "main": "src/api/index.js",
   "bin": {
     "smallcode": "bin/smallcode.js",
+    "smolv2": "bin/smallcode.js",
     "smallcode-init": "bin/init.js",
     "smallcode-rag-index": "bin/rag-index.js"
   },

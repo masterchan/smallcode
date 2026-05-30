@@ -3,6 +3,8 @@
 
 const chalk = require('chalk');
 
+const { fitAnsi } = require('../src/tui/utils');
+
 // ─── Markdown-lite renderer (no heavy deps) ──────────────────────────────────
 
 function renderMarkdown(text) {
@@ -111,82 +113,174 @@ function highlightLine(line, lang) {
 // ─── Status line ─────────────────────────────────────────────────────────────
 
 function renderStatus(config, historyLen) {
-  const model = chalk.cyan(config.model.name);
-  const msgs = chalk.gray(`${historyLen} msgs`);
-  const cwd = chalk.gray(process.cwd().split(/[/\\]/).slice(-2).join('/'));
-  return `  ${model} │ ${msgs} │ ${cwd}`;
+  const w = process.stdout.columns || 80;
+  const brandText = 'smallcode';
+  const modelText = config.model.name;
+  const msgsText = `${historyLen} msgs`;
+  const cwdText = process.cwd().split(/[/\\]/).slice(-2).join('/');
+
+  if (w < 40) {
+    const brand = chalk.bold.whiteBright(brandText);
+    const model = chalk.cyan(modelText);
+    const line = `  ${brand} │ ${model}`;
+    return fitAnsi(line, w);
+  } else if (w < 65) {
+    const brand = chalk.bold.whiteBright(brandText);
+    const model = chalk.cyan(modelText);
+    const msgs = chalk.gray(msgsText);
+    const line = `  ${brand} │ ${model} │ ${msgs}`;
+    return fitAnsi(line, w);
+  } else {
+    const brand = chalk.bold.whiteBright(brandText);
+    const model = chalk.cyan(modelText);
+    const msgs = chalk.gray(msgsText);
+    const cwd = chalk.gray(cwdText);
+    const line = `  ${brand} │ ${model} │ ${msgs} │ ${cwd}`;
+    return fitAnsi(line, w);
+  }
 }
 
 // ─── Welcome banner ──────────────────────────────────────────────────────────
 
 function renderWelcome(config, graphOk) {
-  let version = '0.9.2';
+  let version = 'unknown';
   try { version = require('../package.json').version; } catch {}
-  const lines = [
-    '',
-    chalk.bold.cyan('  ⚡ SmallCode') + chalk.gray(` v${version}`),
-    '',
-    `  Model:    ${chalk.white(config.model.name)}`,
-    `  Endpoint: ${chalk.gray(config.model.baseUrl)}`,
-    `  Graph:    ${graphOk ? chalk.green('✓ indexed') : chalk.gray('disabled')}`,
-    `  Dir:      ${chalk.gray(process.cwd())}`,
-    '',
-    chalk.gray('  Type a message to chat. /help for commands. /quit to exit.'),
-    '',
-  ];
-  return lines.join('\n');
+  const cwd = process.cwd();
+
+  const w = process.stdout.columns || 80;
+  if (w < 20) {
+    return fitAnsi('  SmallCode TUI', w);
+  }
+  const cardWidth = Math.max(12, Math.min(w - 4, 76));
+  const border = chalk.gray;
+  const brand = chalk.bold.whiteBright;
+  const accent = chalk.cyan;
+  const muted = chalk.gray;
+
+  const topBorder = border('╭' + '─'.repeat(Math.max(0, cardWidth - 2)) + '╮');
+  const midBorder = border('├' + '─'.repeat(Math.max(0, cardWidth - 2)) + '┤');
+  const botBorder = border('╰' + '─'.repeat(Math.max(0, cardWidth - 2)) + '╯');
+
+  if (cardWidth < 45) {
+    // Narrow layout: stacked rows
+    const line1 = border('│') + fitAnsi(brand(` SmallCode v${version}`), cardWidth - 2) + border('│');
+    const line2 = border('│') + fitAnsi(accent(` Model:    ${config.model.name}`), cardWidth - 2) + border('│');
+    const line3 = border('│') + fitAnsi(muted(` Endpoint: ${config.model.baseUrl || 'http://localhost:11434'}`), cardWidth - 2, { ellipsis: true }) + border('│');
+    const line4 = border('│') + fitAnsi(chalk.white(` Cwd:      ${cwd} (indexed: ${graphOk ? 'yes' : 'no'})`), cardWidth - 2, { ellipsis: true }) + border('│');
+    const line5 = border('│') + fitAnsi(muted(` Hints:    /help /quit /model /memory`), cardWidth - 2) + border('│');
+
+    return [
+      '',
+      topBorder,
+      line1,
+      line2,
+      line3,
+      line4,
+      line5,
+      botBorder,
+      ''
+    ].join('\n');
+  } else {
+    // Wide layout: side-by-side grid
+    const titlePart = ` ⚡ SmallCode v${version} `;
+    const titleLen = Math.max(0, Math.floor(cardWidth * 0.45));
+    const modelLen = Math.max(0, cardWidth - 2 - titleLen - 1);
+
+    const rawModelPart = ` Model: ${config.model.name} `;
+    const col1 = fitAnsi(brand(titlePart), titleLen);
+    const col2 = fitAnsi(accent(rawModelPart), modelLen, { align: 'right' });
+    const line1 = border('│') + col1 + border('│') + col2 + border('│');
+
+    const epPart = ` Endpoint: ${config.model.baseUrl || 'http://localhost:11434'}`;
+    const line2 = border('│') + fitAnsi(chalk.gray(epPart), cardWidth - 2, { ellipsis: true }) + border('│');
+
+    const dirPart = ` Cwd: ${cwd} (indexed: ${graphOk ? 'yes' : 'no'})`;
+    const line3 = border('│') + fitAnsi(chalk.white(dirPart), cardWidth - 2, { ellipsis: true }) + border('│');
+
+    const hintPart = ` Hints: /help list  │  /model switch  │  /quit exit  │  /mcp servers`;
+    const line4 = border('│') + fitAnsi(muted(hintPart), cardWidth - 2) + border('│');
+
+    const hintPart2 = `        /memory project memory  │  /skill manage skills  │  /diff git diff`;
+    const line5 = border('│') + fitAnsi(muted(hintPart2), cardWidth - 2) + border('│');
+
+    return [
+      '',
+      topBorder,
+      line1,
+      midBorder,
+      line2,
+      line3,
+      midBorder,
+      line4,
+      line5,
+      botBorder,
+      ''
+    ].join('\n');
+  }
 }
 
 // ─── Tool indicators ─────────────────────────────────────────────────────────
 
 function toolStart(name) {
-  return `  ${chalk.cyan('⚙')} ${chalk.cyan(name)} `;
+  return `  ${chalk.cyan('⚙')} ${fitAnsi(chalk.cyan(name), 14)} │ `;
 }
 
 function toolSuccess(msg, ms) {
-  return `${chalk.green('✓')} ${msg} ${chalk.gray(ms + 'ms')}`;
+  return `${chalk.green('✓')} ${chalk.white(msg)} ${chalk.gray('(' + ms + 'ms)')}`;
 }
 
 function toolError(msg) {
-  return `${chalk.red('✗')} ${msg}`;
+  return `${chalk.red('✗')} ${chalk.red(msg)}`;
 }
 
 function toolEdited(filePath, line, ms) {
-  return `${chalk.yellow('✓')} Edited ${filePath}:${line} ${chalk.gray(ms + 'ms')}`;
+  return `${chalk.yellow('✓')} Edited ${chalk.cyan(filePath)}:${chalk.yellow(line)} ${chalk.gray('(' + ms + 'ms)')}`;
 }
 
 function toolCreated(filePath, lines, ms) {
-  return `${chalk.green('✓')} Created ${chalk.bold(filePath)} (${lines} lines) ${chalk.gray(ms + 'ms')}`;
+  return `${chalk.green('✓')} Created ${chalk.bold.cyan(filePath)} (${lines} lines) ${chalk.gray('(' + ms + 'ms)')}`;
 }
 
 function toolUpdated(filePath, lines, ms) {
-  return `${chalk.green('✓')} Updated ${chalk.bold(filePath)} (${lines} lines) ${chalk.gray(ms + 'ms')}`;
+  return `${chalk.green('✓')} Updated ${chalk.bold.cyan(filePath)} (${lines} lines) ${chalk.gray('(' + ms + 'ms)')}`;
 }
 
 function toolBash(cmd, ms) {
-  return `${chalk.gray('$')} ${chalk.gray(cmd)} ${chalk.gray(ms + 'ms')}`;
+  return `${chalk.gray('$')} ${chalk.white(cmd)} ${chalk.gray('(' + ms + 'ms)')}`;
 }
 
 function improvementLoop(errors, attempt, max) {
-  const header = chalk.yellow(`⟳ ${errors.length} error(s) — fix attempt ${attempt}/${max}`);
-  const errLines = errors.slice(0, 3).map(e => `    ${chalk.red(e)}`).join('\n');
-  return `  ${header}\n${errLines}`;
+  const border = chalk.gray;
+  const prefix = chalk.yellow('  LOOP ⟳') + border('│ ');
+  const contPrefix = '        ' + border('│ ');
+
+  const header = chalk.yellow(`${errors.length} error(s) — fix attempt ${attempt}/${max}`);
+  const errLines = errors.slice(0, 3).map(e => `${contPrefix}${chalk.red(e)}`).join('\n');
+  return `${prefix}${header}\n${errLines}`;
 }
 
 function improvementFixed(filePath, attempts) {
-  return `  ${chalk.green('✓')} ${filePath} — ${chalk.green(`fixed after ${attempts} attempt(s)`)}`;
+  const border = chalk.gray;
+  const prefix = chalk.green('  LOOP ✓') + border('│ ');
+  return `${prefix}${chalk.cyan(filePath)} — ${chalk.green(`fixed after ${attempts} attempt(s)`)}`;
 }
 
 function improvementGaveUp(filePath, max) {
-  return `  ${chalk.red('⚠')} ${filePath}: giving up after ${max} fix attempts`;
+  const border = chalk.gray;
+  const prefix = chalk.red('  LOOP ⚠') + border('│ ');
+  return `${prefix}${chalk.red(filePath)}: giving up after ${max} fix attempts`;
 }
 
 function turnSummary(calls) {
-  return chalk.gray(`  ─── ${calls} tool calls this turn ───`);
+  const border = chalk.gray;
+  const prefix = chalk.gray('  INFO  ') + border('│ ');
+  return `${prefix}${chalk.gray(`─── ${calls} tool calls this turn ───`)}`;
 }
 
 function compacted(removed) {
-  return chalk.gray(`  [compacted ${removed} old messages]`);
+  const border = chalk.gray;
+  const prefix = chalk.gray('  INFO  ') + border('│ ');
+  return `${prefix}${chalk.gray(`[compacted ${removed} old messages]`)}`;
 }
 
 // ─── Diff display ────────────────────────────────────────────────────────────
@@ -197,17 +291,24 @@ function renderDiff(filePath, oldStr, newStr, lineNum) {
 
   if (oldLines.length > 8 && newLines.length > 8) return ''; // Too large
 
-  let output = chalk.gray(`    ┌─ ${filePath}:${lineNum}`) + '\n';
+  const border = chalk.gray;
+  const prefix = chalk.cyan('  DIFF  ') + border('│ ');
+  const contPrefix = '        ' + border('│ ');
+
+  let output = `${prefix}${chalk.cyan(filePath)}:${chalk.yellow(lineNum)}\n`;
   for (const line of oldLines.slice(0, 5)) {
-    output += chalk.red(`    │ - ${line}`) + '\n';
+    output += `${contPrefix}${chalk.red('-')} ${chalk.red(line)}\n`;
   }
-  if (oldLines.length > 5) output += chalk.red(`    │ ... (${oldLines.length - 5} more)`) + '\n';
+  if (oldLines.length > 5) {
+    output += `${contPrefix}${chalk.gray(`... (${oldLines.length - 5} more)`)}\n`;
+  }
   for (const line of newLines.slice(0, 5)) {
-    output += chalk.green(`    │ + ${line}`) + '\n';
+    output += `${contPrefix}${chalk.green('+')} ${chalk.green(line)}\n`;
   }
-  if (newLines.length > 5) output += chalk.green(`    │ ... (${newLines.length - 5} more)`) + '\n';
-  output += chalk.gray(`    └─`);
-  return output;
+  if (newLines.length > 5) {
+    output += `${contPrefix}${chalk.gray(`... (${newLines.length - 5} more)`)}\n`;
+  }
+  return output.trimEnd();
 }
 
 module.exports = {

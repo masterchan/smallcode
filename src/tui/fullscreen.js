@@ -11,34 +11,8 @@
 
 const readline = require('readline');
 
-// ─── Visual Width Helpers ─────────────────────────────────────────────────────
-// CJK and fullwidth characters occupy 2 columns in the terminal, not 1.
-// Using string.length for layout/cursor breaks when input contains CJK text.
+const { visualWidth, visualLength, fitAnsi, stripAnsi } = require('./utils');
 
-function visualWidth(ch) {
-  const cp = ch.codePointAt(0);
-  if (!cp) return 0;
-  if (cp >= 0x1100 && (
-    cp <= 0x115F ||                    // Hangul Jamo
-    (cp >= 0x2E80 && cp <= 0xA4CF) ||  // CJK Radicals, Kangxi, Ideographic Description, CJK Symbols, Hiragana, Katakana, Bopomofo, etc.
-    (cp >= 0xA960 && cp <= 0xA97C) ||  // Hangul Jamo Extended-A
-    (cp >= 0xAC00 && cp <= 0xD7AF) ||  // Hangul Syllables
-    (cp >= 0xF900 && cp <= 0xFAFF) ||  // CJK Compatibility Ideographs
-    (cp >= 0xFE10 && cp <= 0xFE19) ||  // Vertical Forms
-    (cp >= 0xFE30 && cp <= 0xFE6F) ||  // CJK Compatibility Forms
-    (cp >= 0xFF01 && cp <= 0xFF60) ||  // Fullwidth Forms
-    (cp >= 0xFFE0 && cp <= 0xFFE6) ||  // Fullwidth Signs
-    (cp >= 0x20000 && cp <= 0x2FFFF) || // CJK Unified Ideographs Extension B-F
-    (cp >= 0x30000 && cp <= 0x3FFFF)   // CJK Unified Ideographs Extension G-H
-  )) return 2;
-  return 1;
-}
-
-function visualLength(str) {
-  let len = 0;
-  for (const ch of str) len += visualWidth(ch);
-  return len;
-}
 
 // Split string into visual lines, each no wider than maxVisualWidth.
 function visualWrap(str, maxVisualWidth) {
@@ -237,6 +211,7 @@ class FullScreenTUI {
     // State
     this.active = false;
     this.model = options.model || 'unknown';
+    this.endpoint = options.endpoint || '';
     this.tokenCount = 0;
     this.msgCount = 0;
     this.isStreaming = false;
@@ -354,10 +329,7 @@ class FullScreenTUI {
     for (let i = 0; i < this.chatHeight; i++) {
       buf += ANSI.moveTo(i + 1, 1);
       const line = visible[i] || '';
-      // Truncate to panel width
-      buf += this._truncate(line, this.chatWidth);
-      // Clear rest of line
-      buf += ' '.repeat(Math.max(0, this.chatWidth - this._stripAnsi(line).length));
+      buf += fitAnsi(line, this.chatWidth);
     }
 
     return buf;
@@ -369,76 +341,95 @@ class FullScreenTUI {
     const h = this.chatHeight;
     const t = this.theme;
 
-    // ASCII logo — block style
-    const logo = [
-      '███████╗███╗   ███╗ █████╗ ██╗     ██╗      ██████╗ ██████╗ ██████╗ ███████╗',
-      '██╔════╝████╗ ████║██╔══██╗██║     ██║     ██╔════╝██╔═══██╗██╔══██╗██╔════╝',
-      '███████╗██╔████╔██║███████║██║     ██║     ██║     ██║   ██║██║  ██║█████╗  ',
-      '╚════██║██║╚██╔╝██║██╔══██║██║     ██║     ██║     ██║   ██║██║  ██║██╔══╝  ',
-      '███████║██║ ╚═╝ ██║██║  ██║███████╗███████╗╚██████╗╚██████╔╝██████╔╝███████╗',
-      '╚══════╝╚═╝     ╚═╝╚═╝  ╚═╝╚══════╝╚══════╝ ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝',
-    ];
+    let version = 'unknown';
+    try { version = require('../../package.json').version; } catch {}
+    const cwd = process.cwd();
 
-    // Use simpler logo if terminal is narrow
-    const simpleLogo = [
-      '╔═╗┌┬┐┌─┐┬  ┬  ╔═╗┌─┐┌┬┐┌─┐',
-      '╚═╗│││├─┤│  │  ║  │ │ ││├┤ ',
-      '╚═╝┴ ┴┴ ┴┴─┘┴─┘╚═╝└─┘─┴┘└─┘',
-    ];
+    const cardWidth = Math.max(10, Math.min(w - 4, 76));
+    const padLeft = Math.max(0, Math.floor((w - cardWidth) / 2));
+    const pl = ' '.repeat(padLeft);
 
-    const useSimple = w < 80;
-    const logoLines = useSimple ? simpleLogo : logo;
-    const logoWidth = logoLines[0].length;
+    const bannerRow = Math.max(2, Math.floor(h * 0.25));
 
-    // Center vertically — logo starts ~1/4 down the screen
-    const startRow = Math.max(2, Math.floor(h * 0.15));
-
-    // Draw logo centered
-    for (let i = 0; i < logoLines.length; i++) {
-      const row = startRow + i;
-      if (row > h) break;
-      const pad = Math.max(0, Math.floor((w - logoWidth) / 2));
-      buf += ANSI.moveTo(row, 1);
-      buf += ' '.repeat(pad) + t.brand + logoLines[i] + ANSI.reset;
+    if (w < 20) {
+      buf += ANSI.moveTo(bannerRow, 1);
+      buf += fitAnsi(' SmallCode TUI', w);
+      return buf;
     }
 
-    // Version below logo
-    const versionRow = startRow + logoLines.length + 1;
-    const versionText = `v${require('../../package.json').version}`;
-    const versionPad = Math.max(0, Math.floor((w - logoWidth) / 2) + logoWidth - versionText.length);
-    buf += ANSI.moveTo(versionRow, versionPad + 1);
-    buf += t.muted + versionText + ANSI.reset;
+    if (cardWidth < 45) {
+      // Extremely compact version for narrow terminals
+      buf += ANSI.moveTo(bannerRow, 1);
+      buf += pl + t.border + BOX.rTopLeft + BOX.horizontal.repeat(Math.max(0, cardWidth - 2)) + BOX.rTopRight + ANSI.reset;
 
-    // Command hints (centered block)
-    const commands = [
-      ['/help', 'show help', 'ctrl+l'],
-      ['/model', 'switch model', ''],
-      ['/memory', 'project memory', ''],
-      ['/skill', 'manage skills', ''],
-      ['/quit', 'exit', 'ctrl+c'],
-    ];
+      buf += ANSI.moveTo(bannerRow + 1, 1);
+      const title = fitAnsi(` SmallCode v${version}`, cardWidth - 2);
+      buf += pl + t.border + BOX.vertical + ANSI.reset + t.brand + title + t.border + BOX.vertical + ANSI.reset;
 
-    const cmdStartRow = versionRow + 3;
-    for (let i = 0; i < commands.length; i++) {
-      const [cmd, desc, shortcut] = commands[i];
-      const row = cmdStartRow + i;
-      if (row > h) break;
-      const line = `${cmd.padEnd(12)} ${desc.padEnd(18)} ${shortcut}`;
-      const pad = Math.max(0, Math.floor((w - 42) / 2));
-      buf += ANSI.moveTo(row, pad + 1);
-      buf += (t.cmdHighlight || t.accent) + cmd.padEnd(12) + ANSI.reset;
-      buf += t.fg + desc.padEnd(18) + ANSI.reset;
-      buf += t.muted + shortcut + ANSI.reset;
+      buf += ANSI.moveTo(bannerRow + 2, 1);
+      const model = fitAnsi(` Model: ${this.model}`, cardWidth - 2);
+      buf += pl + t.border + BOX.vertical + ANSI.reset + t.accent + model + t.border + BOX.vertical + ANSI.reset;
+
+      buf += ANSI.moveTo(bannerRow + 3, 1);
+      const ep = fitAnsi(` Endpoint: ${this.endpoint || 'http://localhost:11434'}`, cardWidth - 2, { ellipsis: true });
+      buf += pl + t.border + BOX.vertical + ANSI.reset + t.muted + ep + t.border + BOX.vertical + ANSI.reset;
+
+      buf += ANSI.moveTo(bannerRow + 4, 1);
+      const hints = fitAnsi(` Hints: /help /quit /model /memory`, cardWidth - 2);
+      buf += pl + t.border + BOX.vertical + ANSI.reset + t.muted + hints + t.border + BOX.vertical + ANSI.reset;
+
+      buf += ANSI.moveTo(bannerRow + 5, 1);
+      const hints2 = fitAnsi(`        /skill /diff /loop /mcp`, cardWidth - 2);
+      buf += pl + t.border + BOX.vertical + ANSI.reset + t.muted + hints2 + t.border + BOX.vertical + ANSI.reset;
+
+      buf += ANSI.moveTo(bannerRow + 6, 1);
+      buf += pl + t.border + BOX.rBottomLeft + BOX.horizontal.repeat(Math.max(0, cardWidth - 2)) + BOX.rBottomRight + ANSI.reset;
+    } else {
+      // Sleek grid layout
+      buf += ANSI.moveTo(bannerRow, 1);
+      buf += pl + t.border + BOX.rTopLeft + BOX.horizontal.repeat(Math.max(0, cardWidth - 2)) + BOX.rTopRight + ANSI.reset;
+
+      buf += ANSI.moveTo(bannerRow + 1, 1);
+      const titlePart = ` ⚡ SmallCode v${version} `;
+      const modelPart = ` Model: ${this.model} `;
+
+      const titleLen = Math.max(0, Math.floor(cardWidth * 0.45));
+      const modelLen = Math.max(0, cardWidth - 2 - titleLen - 1); // minus divider
+      const col1 = fitAnsi(titlePart, titleLen);
+      const col2 = fitAnsi(modelPart, modelLen, { align: 'right' });
+      const contentRow1 = `${t.brand}${col1}${t.muted}│${t.accent}${col2}`;
+      buf += pl + t.border + BOX.vertical + ANSI.reset + contentRow1 + t.border + BOX.vertical + ANSI.reset;
+
+      buf += ANSI.moveTo(bannerRow + 2, 1);
+      buf += pl + t.border + BOX.teeLeft + BOX.horizontal.repeat(Math.max(0, cardWidth - 2)) + BOX.teeRight + ANSI.reset;
+
+      buf += ANSI.moveTo(bannerRow + 3, 1);
+      const epPart = ` Endpoint: ${this.endpoint || 'http://localhost:11434'}`;
+      const contentRowEp = ` ${t.muted}${fitAnsi(epPart, cardWidth - 4, { ellipsis: true })} `;
+      buf += pl + t.border + BOX.vertical + ANSI.reset + contentRowEp + t.border + BOX.vertical + ANSI.reset;
+
+      buf += ANSI.moveTo(bannerRow + 4, 1);
+      const dirPart = ` Cwd: ${cwd}`;
+      const contentRow2 = ` ${t.fg}${fitAnsi(dirPart, cardWidth - 4, { ellipsis: true })} `;
+      buf += pl + t.border + BOX.vertical + ANSI.reset + contentRow2 + t.border + BOX.vertical + ANSI.reset;
+
+      buf += ANSI.moveTo(bannerRow + 5, 1);
+      buf += pl + t.border + BOX.teeLeft + BOX.horizontal.repeat(Math.max(0, cardWidth - 2)) + BOX.teeRight + ANSI.reset;
+
+      buf += ANSI.moveTo(bannerRow + 6, 1);
+      const hintPart = ` Hints: /help list  │  /model switch  │  /quit exit  │  /mcp servers`;
+      const contentRow3 = ` ${t.muted}${fitAnsi(hintPart, cardWidth - 4)} `;
+      buf += pl + t.border + BOX.vertical + ANSI.reset + contentRow3 + t.border + BOX.vertical + ANSI.reset;
+
+      buf += ANSI.moveTo(bannerRow + 7, 1);
+      const hintPart2 = `        /memory project memory  │  /skill manage skills  │  /diff git diff`;
+      const contentRow4 = ` ${t.muted}${fitAnsi(hintPart2, cardWidth - 4)} `;
+      buf += pl + t.border + BOX.vertical + ANSI.reset + contentRow4 + t.border + BOX.vertical + ANSI.reset;
+
+      buf += ANSI.moveTo(bannerRow + 8, 1);
+      buf += pl + t.border + BOX.rBottomLeft + BOX.horizontal.repeat(Math.max(0, cardWidth - 2)) + BOX.rBottomRight + ANSI.reset;
     }
 
-    // Model info below commands
-    const infoRow = cmdStartRow + commands.length + 2;
-    if (infoRow < h) {
-      const infoText = `${this.model}`;
-      const infoPad = Math.max(0, Math.floor((w - infoText.length) / 2));
-      buf += ANSI.moveTo(infoRow, infoPad + 1);
-      buf += t.brandDim + infoText + ANSI.reset;
-    }
 
     return buf;
   }
@@ -527,64 +518,78 @@ class FullScreenTUI {
       c.cmd.slice(1).startsWith(filter) || (c.alias && c.alias.slice(1).startsWith(filter))
     );
 
-    if (filtered.length === 0) return '';
-
-    // Clamp selection to valid range
-    this.commandPaletteSelection = Math.max(0, Math.min(this.commandPaletteSelection, filtered.length - 1));
-
-    // Calculate how many items can fit above the input box
-    // Leave 2 rows for the top/bottom borders of the palette box + 1 buffer row
+    // Keep layout stable: fixed 8 visible rows
     const availableRows = inputRow - 3;
-    const maxVisible = Math.max(1, Math.min(filtered.length, availableRows, 12));
-    this._paletteMaxVisible = maxVisible; // Store for arrow key handler
+    const maxVisible = Math.max(1, Math.min(8, availableRows));
+    this._paletteMaxVisible = maxVisible;
 
-    // Keep scroll offset in sync with selection
+    // Clamp selection
+    if (filtered.length > 0) {
+      this.commandPaletteSelection = Math.max(0, Math.min(this.commandPaletteSelection, filtered.length - 1));
+    } else {
+      this.commandPaletteSelection = 0;
+    }
+
+    // Keep scroll offset in sync
     if (this.commandPaletteSelection < this._paletteScrollOffset) {
       this._paletteScrollOffset = this.commandPaletteSelection;
     } else if (this.commandPaletteSelection >= this._paletteScrollOffset + maxVisible) {
       this._paletteScrollOffset = this.commandPaletteSelection - maxVisible + 1;
     }
-    this._paletteScrollOffset = Math.max(0, Math.min(this._paletteScrollOffset, filtered.length - maxVisible));
+    const maxOffset = Math.max(0, filtered.length - maxVisible);
+    this._paletteScrollOffset = Math.max(0, Math.min(this._paletteScrollOffset, maxOffset));
 
-    const paletteWidth = Math.min(this.width - 4, 50);
+    const paletteWidth = Math.max(20, Math.min(this.width - 4, 60));
     const startRow = inputRow - maxVisible - 1;
-    const hasMore = filtered.length > maxVisible;
 
-    // Draw top border (with count if scrollable)
+    // Draw top border with result count (e.g. [5 of 12])
     buf += ANSI.moveTo(startRow, 2);
-    const countLabel = hasMore ? ` ${this._paletteScrollOffset + 1}-${Math.min(this._paletteScrollOffset + maxVisible, filtered.length)}/${filtered.length} ` : '';
-    const topFill = paletteWidth - 2 - countLabel.length;
-    buf += this.theme.border + BOX.rTopLeft + BOX.horizontal.repeat(Math.max(0, topFill)) + (hasMore ? this.theme.muted + countLabel + this.theme.border : '') + BOX.rTopRight + ANSI.reset;
+    const countLabel = filtered.length > 0
+      ? `  ${this.commandPaletteSelection + 1}/${filtered.length}  `
+      : '  0/0  ';
+    const topLabel = ` Commands ${countLabel}`;
+    const topFill = paletteWidth - 2 - topLabel.length;
+    buf += this.theme.border + BOX.rTopLeft + this.theme.accent + topLabel + this.theme.border + BOX.horizontal.repeat(Math.max(0, topFill)) + BOX.rTopRight + ANSI.reset;
 
-    // Draw visible items (windowed by scroll offset)
+    // Render fixed maxVisible rows
     for (let i = 0; i < maxVisible; i++) {
-      const itemIdx = i + this._paletteScrollOffset;
-      if (itemIdx >= filtered.length) break;
-      const cmd = filtered[itemIdx];
-      const isSelected = itemIdx === this.commandPaletteSelection;
       const row = startRow + 1 + i;
-
       buf += ANSI.moveTo(row, 2);
       buf += this.theme.border + BOX.vertical + ANSI.reset;
 
-      if (isSelected) buf += ANSI.inverse;
+      const itemIdx = i + this._paletteScrollOffset;
+      if (itemIdx < filtered.length) {
+        const cmd = filtered[itemIdx];
+        const isSelected = itemIdx === this.commandPaletteSelection;
 
-      const cmdText = cmd.cmd + (cmd.alias ? ` (${cmd.alias})` : '');
-      const line = ` ${cmdText.padEnd(16)} ${cmd.desc}`;
-      buf += (isSelected ? this.theme.accent : this.theme.fg) + line.slice(0, paletteWidth - 3).padEnd(paletteWidth - 3);
+        // Columns: Command (width 16) | Divider (width 3) | Description
+        const CMD_COL_WIDTH = 16;
+        const descWidth = Math.max(1, paletteWidth - 2 - 1 - CMD_COL_WIDTH - 3);
 
-      if (isSelected) buf += ANSI.reset;
-      buf += ANSI.reset + this.theme.border + BOX.vertical + ANSI.reset;
+        const cmdText = cmd.cmd + (cmd.alias ? ` (${cmd.alias})` : '');
+        const col1 = fitAnsi(cmdText, CMD_COL_WIDTH);
+        const col2 = fitAnsi(cmd.desc, descWidth);
+
+        // Row highlighting with premium contrast
+        let rowContent = '';
+        if (isSelected) {
+          rowContent = ANSI.inverse + this.theme.cmdHighlight + ' ' + col1 + ANSI.reset + ANSI.inverse + this.theme.border + ' │ ' + ANSI.reset + ANSI.inverse + this.theme.accent + col2 + ANSI.reset;
+        } else {
+          rowContent = ' ' + this.theme.cmdHighlight + col1 + ANSI.reset + this.theme.border + ' │ ' + ANSI.reset + this.theme.fg + col2 + ANSI.reset;
+        }
+
+        buf += rowContent;
+      } else {
+        // Pad empty rows to keep the palette height fixed
+        buf += ' '.repeat(Math.max(0, paletteWidth - 2));
+      }
+
+      buf += this.theme.border + BOX.vertical + ANSI.reset;
     }
 
-    // Draw bottom border (with scroll hint if there are hidden items below)
+    // Bottom border
     buf += ANSI.moveTo(startRow + maxVisible + 1, 2);
-    const scrollHint = hasMore && this._paletteScrollOffset + maxVisible < filtered.length ? ' ↓ more' : '';
-    const scrollHintUp = hasMore && this._paletteScrollOffset > 0 ? ' ↑ ' : '';
-    buf += this.theme.border + BOX.rBottomLeft + BOX.horizontal.repeat(Math.max(0, paletteWidth - 2 - scrollHint.length - scrollHintUp.length));
-    if (scrollHintUp) buf += this.theme.muted + scrollHintUp + this.theme.border;
-    if (scrollHint) buf += this.theme.muted + scrollHint + this.theme.border;
-    buf += BOX.rBottomRight + ANSI.reset;
+    buf += this.theme.border + BOX.rBottomLeft + BOX.horizontal.repeat(Math.max(0, paletteWidth - 2)) + BOX.rBottomRight + ANSI.reset;
 
     return buf;
   }
@@ -597,24 +602,107 @@ class FullScreenTUI {
     buf += ANSI.moveTo(row, 1);
     buf += t.statusBg;
 
-    // Dynamic status message (e.g. spinner during model call) overrides left hint
-    const left = this.statusMsg
-      ? ` ${this.statusMsg}`
-      : ` enter send  shift+drag copy`;
-    const scrollInfo = this.chatScroll < 0 ? `  ↑ scrolled` : '';
-    const tokenStr = this.tokenInfo ? `  ${this.tokenInfo}` : '';
-    const right = ` smallcode  ${this.model}  ${this.isStreaming ? '⟳' : '●'} `;
-    const padding = this.width - left.length - scrollInfo.length - tokenStr.length - right.length;
-
-    // Color the status message differently when it contains a spinner frame
-    const leftColor = this.statusMsg ? (t.accent || t.muted) : t.muted;
-    buf += leftColor + left + ANSI.reset + t.statusBg;
-    if (scrollInfo) {
-      buf += (t.warning || t.muted) + scrollInfo + ANSI.reset + t.statusBg;
+    // 1. Left: Action/Status
+    let actionStr;
+    if (this.isStreaming) {
+      actionStr = ' Streaming...';
+    } else if (this.statusMsg) {
+      actionStr = ` ${this.statusMsg}`;
+    } else {
+      actionStr = ' enter send │ /help commands';
     }
-    buf += t.muted + tokenStr + ANSI.reset + t.statusBg;
-    buf += ' '.repeat(Math.max(1, padding));
-    buf += t.brandDim + right + ANSI.reset;
+
+    // 2. Middle: Scroll & Token info
+    let scrollStr = this.chatScroll < 0 ? '↑ scrolled' : '';
+    let tokenStr = this.tokenInfo ? `${this.tokenInfo}` : '';
+    let middleStr = '';
+    if (scrollStr && tokenStr) {
+      middleStr = `${scrollStr} │ ${tokenStr}`;
+    } else {
+      middleStr = scrollStr || tokenStr || '';
+    }
+
+    // 3. Right: Brand, Model, and Indicator
+    const modelTrunc = this.model.length > 20 ? this.model.slice(0, 17) + '...' : this.model;
+    const indicatorText = this.isStreaming ? '⟳ streaming' : '● idle';
+    const statusIndicator = this.isStreaming
+      ? t.success + '⟳ streaming' + t.brandDim
+      : t.muted + '● idle' + t.brandDim;
+
+    // Compute raw lengths to adjust layout
+    let rawAction = this._stripAnsi(actionStr);
+    let rawMiddle = this._stripAnsi(middleStr);
+
+    // Dynamically adjust segments based on total terminal width
+    const totalWidth = this.width;
+
+    if (totalWidth < 45) {
+      // Tiny terminal: only left and indicator
+      const rightPart = ` ${indicatorText} `;
+      const maxLeft = Math.max(0, totalWidth - rightPart.length);
+      const leftPart = rawAction.length > maxLeft ? rawAction.slice(0, Math.max(0, maxLeft - 3)) + '...' : rawAction.padEnd(maxLeft);
+
+      const leftColored = (this.isStreaming ? t.success : t.accent) + leftPart + t.brandDim;
+      const rightColored = this.isStreaming ? t.success + rightPart : t.muted + rightPart;
+
+      const lineBuf = leftColored + rightColored;
+      buf += this._truncate(lineBuf, totalWidth) + ANSI.reset;
+      return buf;
+    }
+
+    // Moderate/Large terminal: Left, Middle (if fits), and Right
+    let showMiddle = true;
+    let rightLabel = `smallcode │ ${modelTrunc} │ `;
+    let rawRight = rightLabel + indicatorText;
+
+    if (totalWidth < 70) {
+      // Medium terminal: drop "smallcode | " to save space
+      rightLabel = `${modelTrunc} │ `;
+      rawRight = rightLabel + indicatorText;
+    }
+
+    // Check if middle fits, otherwise drop it
+    const leftSpace = rawAction.length;
+    const rightSpace = rawRight.length;
+    const remaining = totalWidth - leftSpace - rightSpace;
+
+    if (remaining < rawMiddle.length + 2) {
+      showMiddle = false;
+      middleStr = '';
+      rawMiddle = '';
+    }
+
+    const newRemaining = totalWidth - leftSpace - rawRight.length;
+    let leftSpacing = 0;
+    let rightSpacing = 0;
+
+    if (showMiddle && newRemaining > rawMiddle.length) {
+      const centerPos = Math.floor(totalWidth / 2);
+      const startMiddle = centerPos - Math.floor(rawMiddle.length / 2);
+      leftSpacing = startMiddle - leftSpace;
+      rightSpacing = totalWidth - leftSpace - leftSpacing - rawMiddle.length - rawRight.length;
+      if (leftSpacing < 1) {
+        leftSpacing = 1;
+        rightSpacing = newRemaining - rawMiddle.length - 1;
+      }
+    } else {
+      leftSpacing = newRemaining;
+      rightSpacing = 0;
+    }
+
+    const actionColored = this.isStreaming ? t.success + actionStr + t.brandDim : t.accent + actionStr + t.brandDim;
+    const middleColored = scrollStr ? t.warning + middleStr + t.brandDim : t.muted + middleStr + t.brandDim;
+    const rightColored = t.brandDim + (totalWidth < 70 ? '' : `smallcode │ `) + t.fg + modelTrunc + t.brandDim + ` │ ` + statusIndicator;
+
+    let lineBuf = actionColored;
+    lineBuf += ' '.repeat(Math.max(0, leftSpacing));
+    if (showMiddle) {
+      lineBuf += middleColored;
+    }
+    lineBuf += ' '.repeat(Math.max(0, rightSpacing));
+    lineBuf += rightColored;
+
+    buf += this._truncate(lineBuf, totalWidth) + ANSI.reset;
 
     return buf;
   }
@@ -867,12 +955,16 @@ class FullScreenTUI {
 
   addChat(role, content) {
     this.showWelcome = false; // Dismiss welcome screen on first message
-    const prefix = role === 'user'
-      ? this.theme.accent + ' You: ' + ANSI.reset
-      : role === 'assistant'
-        ? this.theme.success + ' AI:  ' + ANSI.reset
-        : this.theme.muted + '      ' + ANSI.reset;
-    const contPrefix = '      '; // continuation indent
+
+    let prefix = '';
+    if (role === 'user') {
+      prefix = this.theme.accent + '  USER  ' + this.theme.border + '│ ' + ANSI.reset;
+    } else if (role === 'assistant') {
+      prefix = this.theme.success + '   AI   ' + this.theme.border + '│ ' + ANSI.reset;
+    } else {
+      prefix = this.theme.muted + '  SYS   ' + this.theme.border + '│ ' + ANSI.reset;
+    }
+    const contPrefix = '        ' + this.theme.border + '│ ' + ANSI.reset;
     const t = this.theme;
 
     const rawLines = content.split('\n');
@@ -894,7 +986,7 @@ class FullScreenTUI {
       }
 
       const p = i === 0 ? prefix : contPrefix;
-      const maxWidth = this.chatWidth - 7;
+      const maxWidth = this.chatWidth - 10;
 
       if (inCodeBlock) {
         // Syntax highlight code lines
@@ -923,16 +1015,26 @@ class FullScreenTUI {
   }
 
   addTool(name, status, detail) {
-    const icon = status === 'ok' ? this.theme.success + '✓' :
-                 status === 'err' ? this.theme.error + '✗' :
-                 this.theme.accent + '⚙';
-    const nameStr = name ? this.theme.accent + name + ANSI.reset + ' ' : '';
+    let icon = '⚙';
+    let iconColor = this.theme.accent;
+    if (status === 'ok') {
+      icon = '✓';
+      iconColor = this.theme.success;
+    } else if (status === 'err') {
+      icon = '✗';
+      iconColor = this.theme.error;
+    }
+
+    const prefix = iconColor + '  TOOL ' + icon + ' ' + this.theme.border + '│ ' + ANSI.reset;
+    const nameStr = name ? this.theme.accent + name + ANSI.reset + ': ' : '';
     const detailStr = detail ? this.theme.muted + detail + ANSI.reset : '';
-    const line = ` ${icon} ${ANSI.reset}${nameStr}${detailStr}`;
+
+    const line = prefix + nameStr + detailStr;
+    const toolPanelLine = ` ${iconColor}${icon}${ANSI.reset} ${nameStr}${detailStr}`;
 
     // Add to both chat and tool panel
     this.chatLines.push(line);
-    this.toolLines.push(line);
+    this.toolLines.push(toolPanelLine);
     this.chatScroll = 0;
     this.render();
   }
@@ -942,25 +1044,27 @@ class FullScreenTUI {
     const t = this.theme;
     const maxLines = 8;
 
-    this.chatLines.push(`${t.border}  ┌─ ${ANSI.reset}${t.accent}${filePath}:${lineNum}${ANSI.reset}`);
+    const prefix = t.accent + '  DIFF  ' + t.border + '│ ' + ANSI.reset;
+    const contPrefix = '        ' + t.border + '│ ' + ANSI.reset;
+
+    this.chatLines.push(`${prefix}${t.accent}${filePath}:${lineNum}${ANSI.reset}`);
 
     const oldLines = oldStr.split('\n').slice(0, maxLines);
     const newLines = newStr.split('\n').slice(0, maxLines);
 
     for (const line of oldLines) {
-      this.chatLines.push(`${t.border}  │ ${ANSI.reset}${t.error}- ${line}${ANSI.reset}`);
+      this.chatLines.push(`${contPrefix}${t.error}- ${line}${ANSI.reset}`);
     }
     if (oldStr.split('\n').length > maxLines) {
-      this.chatLines.push(`${t.border}  │ ${ANSI.reset}${t.muted}  ... (${oldStr.split('\n').length - maxLines} more)${ANSI.reset}`);
+      this.chatLines.push(`${contPrefix}${t.muted}... (${oldStr.split('\n').length - maxLines} more)${ANSI.reset}`);
     }
     for (const line of newLines) {
-      this.chatLines.push(`${t.border}  │ ${ANSI.reset}${t.success}+ ${line}${ANSI.reset}`);
+      this.chatLines.push(`${contPrefix}${t.success}+ ${line}${ANSI.reset}`);
     }
     if (newStr.split('\n').length > maxLines) {
-      this.chatLines.push(`${t.border}  │ ${ANSI.reset}${t.muted}  ... (${newStr.split('\n').length - maxLines} more)${ANSI.reset}`);
+      this.chatLines.push(`${contPrefix}${t.muted}... (${newStr.split('\n').length - maxLines} more)${ANSI.reset}`);
     }
 
-    this.chatLines.push(`${t.border}  └─${ANSI.reset}`);
     this.chatScroll = 0;
     this.render();
   }
@@ -983,11 +1087,12 @@ class FullScreenTUI {
   // Stream a token into the last chat line
   streamToken(token) {
     if (this.chatLines.length === 0 || !this._lastLineIsStreaming) {
-      this.chatLines.push(this.theme.success + ' AI:  ' + ANSI.reset);
+      const prefix = this.theme.success + '   AI   ' + this.theme.border + '│ ' + ANSI.reset;
+      this.chatLines.push(prefix);
       this._lastLineIsStreaming = true;
     }
     const lastIdx = this.chatLines.length - 1;
-    const maxWidth = this.chatWidth - 7;
+    const maxWidth = this.chatWidth - 10;
 
     // Handle newlines in token
     const parts = token.split('\n');
@@ -996,7 +1101,7 @@ class FullScreenTUI {
     // Word wrap current line if too long
     if (this._stripAnsi(this.chatLines[lastIdx]).length > maxWidth) {
       const full = this.chatLines[lastIdx];
-      const prefix = '      ';
+      const prefix = '        ' + this.theme.border + '│ ' + ANSI.reset;
       // Find where content starts (after any prefix)
       const stripped = this._stripAnsi(full);
       const wrapped = this._wordWrap(stripped, maxWidth);
@@ -1007,7 +1112,7 @@ class FullScreenTUI {
     }
 
     for (let i = 1; i < parts.length; i++) {
-      this.chatLines.push('      ' + parts[i]);
+      this.chatLines.push('        ' + this.theme.border + '│ ' + ANSI.reset + parts[i]);
     }
     this.chatScroll = 0;
     this.render();
@@ -1022,14 +1127,11 @@ class FullScreenTUI {
   // ─── Utilities ───────────────────────────────────────────────────────
 
   _truncate(str, maxLen) {
-    const stripped = this._stripAnsi(str);
-    if (stripped.length <= maxLen) return str;
-    // Rough truncation (doesn't perfectly handle ANSI mid-cut)
-    return str.slice(0, maxLen + (str.length - stripped.length)) + ANSI.reset;
+    return fitAnsi(str, maxLen, { pad: false });
   }
 
   _stripAnsi(str) {
-    return str.replace(/\x1b\[[0-9;]*m/g, '');
+    return stripAnsi(str);
   }
 
   _wordWrap(text, maxWidth) {

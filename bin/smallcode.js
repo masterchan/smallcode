@@ -274,6 +274,7 @@ async function runTUI(config) {
 
     const screen = new FullScreenTUI({
       model: config.model.name,
+      endpoint: config.model.baseUrl,
       theme: config.tui?.theme || 'dark',
       showToolPanel: (process.stdout.columns || 80) > 120,
       onSubmit: async (input) => {

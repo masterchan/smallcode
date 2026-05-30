@@ -35,6 +35,8 @@ npx smallcode
 # Start in your project directory
 cd my-project
 smallcode
+# Or use the packaged command alias:
+smolv2
 ```
 
 ### Prebuilt Binaries (no Node.js needed)
