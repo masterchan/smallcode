@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.6.0] - 2026-05-31
 
 ### feat: hybrid code search — exact + semantic in one call (#67)
 
@@ -25,6 +25,21 @@ doesn't contain the query words, and ranks plain grep-style hits by relevance.
   `SMALLCODE_HYBRID_MAX_BYTES` (default 512KiB).
 - Test coverage: `test/hybrid_search.test.js` (11 cases). Full suite: 313
   passing.
+
+### feat: refreshed terminal UI visuals (#72)
+
+Visual-only refresh of the TUI renderer (no runtime/raw-mode changes):
+
+- Compact rounded-corner welcome banner card (logo, version, model, endpoint,
+  cwd) with responsive fallbacks for narrow viewports.
+- Stable 10-character gutters (`USER`/`AI`/`SYS`/`TOOL`/`DIFF`) for aligned
+  transcripts, semantic tool-row icons, and a fixed-height command palette.
+- Restyled status bar (left action / centered scroll+tokens / right
+  model+brand+busy state) with width-aware truncation.
+- New `src/tui/utils.js` width helper (`fitAnsi`) — CJK-aware and
+  surrogate-pair-safe; full wcwidth/ZWJ grapheme handling is intentionally out
+  of scope. Adds `test/tui_layout.test.js` (viewport adaptation cases).
+- Fixes a `prompt-inject` plugin module path (`../../` → `../../../`).
 
 ## [1.5.2] - 2026-05-30
 
